@@ -701,7 +701,7 @@ func (s *server) sendAsync(value interface{}) {
 	}()
 }
 
-// The event loop that is run when the server is in a Follower state.
+// 跟随者事件循环.
 // Responds to RPCs from candidates and leaders.
 // Converts to candidate if election timeout elapses without either:
 //   1.Receiving valid AppendEntries RPC, or
@@ -760,9 +760,11 @@ func (s *server) followerLoop() {
 
 		case <-timeoutChan:
 			// only allow synced follower to promote to candidate
+			// 只有在超时的情况下，才能变成 候选人
 			if s.promotable() {
 				s.setState(Candidate)
 			} else {
+				// 作为跟随者继续等待，刷新超时时间
 				update = true
 			}
 		}
