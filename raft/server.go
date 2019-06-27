@@ -568,11 +568,9 @@ func (s *server) Running() bool {
 // Term
 //--------------------------------------
 
-// updates the current term for the server. This is only used when a larger
-// external term is found.
-// 更新当前节点的任期
-// 只要发现了更大的任期，就需要更新当前节点的任期（保证任期的逻辑时钟特性）
-// 如果一个leader发现了更大的term，立即停止自己的领导身份，变身follwer（保证任期最大特性，同时leader被废弃后，要保证整个集群的信息完成性不受影响）
+// 可能涉及的操作：
+// 1：更新当前任期   2：存储prevLeader   3：voteFor重置   4：leader = leaderName
+// 如果一个leader发现了更大的term，立即停止自己的领导身份，变身follwer（保证任期最大特性, 保证任期的逻辑时钟特性，同时leader被废弃后，要保证整个集群的信息完成性不受影响）
 func (s *server) updateCurrentTerm(term uint64, leaderName string) {
 	_assert(term > s.currentTerm,
 		"upadteCurrentTerm: update is called when term is not larger than currentTerm")
@@ -1015,22 +1013,25 @@ func (s *server) AppendEntries(req *AppendEntriesRequest) *AppendEntriesResponse
 	return resp
 }
 
-// 处理 ”日志添加“ 请求
+// 可能涉及到的操作
+// 1：任期检查   2：日志完备性检查   3：append log   4：提交日志
+// 任期检查中，低于当前任期只是return false
 func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*AppendEntriesResponse, bool) {
 	s.traceln("server.ae.process")
 
 	// 任期小于本节点，直接return false
+	// 任何服务、任何时刻，任期值低于当前任期的数据都不可信
 	if req.Term < s.currentTerm {
 		s.debugln("server.ae.error: stale term")
 		return newAppendEntriesResponse(s.currentTerm, false, s.log.currentIndex(), s.log.CommitIndex()), false
 	}
 
 	// 任期相同
+	// 说明有可能是当前节点的领导者发来的消息
 	if req.Term == s.currentTerm {
 		_assert(s.State() != Leader, "leader.elected.at.same.term.%d\n", s.currentTerm)
 
 		// 如果是候选人状态，直接切换成follower
-		// why ?
 		if s.state == Candidate {
 			s.setState(Follower)
 		}
@@ -1057,6 +1058,7 @@ func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*Append
 	}
 
 	// 提交日志.
+	// append日志和提交日志可以同时进行
 	if err := s.log.setCommitIndex(req.CommitIndex); err != nil {
 		s.debugln("server.ae.commit.error: ", err)
 		return newAppendEntriesResponse(s.currentTerm, false, s.log.currentIndex(), s.log.CommitIndex()), true
@@ -1066,11 +1068,11 @@ func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*Append
 	return newAppendEntriesResponse(s.currentTerm, true, s.log.currentIndex(), s.log.CommitIndex()), true
 }
 
-// Processes the "append entries" response from the peer. This is only
-// processed when the server is a leader. Responses received during other
-// states are dropped.
+// 可能涉及到的操作
+// 1：判断当前任期   2：leader提交日志，写进磁盘
 func (s *server) processAppendEntriesResponse(resp *AppendEntriesResponse) {
-	// If we find a higher term then change to a follower and exit.
+	// 如果返回的任期大于当前任期，更新自己的任期
+	// 并切换成follwer
 	if resp.Term() > s.Term() {
 		s.updateCurrentTerm(resp.Term(), "")
 		return
@@ -1092,7 +1094,8 @@ func (s *server) processAppendEntriesResponse(resp *AppendEntriesResponse) {
 		return
 	}
 
-	// Determine the committed index that a majority has.
+	// 寻找可提交日志的最大索引值
+	// leader+follower，大多数节点的日志索引值的最大值
 	var indices []uint64
 	indices = append(indices, s.log.currentIndex())
 	for _, peer := range s.peers {
@@ -1100,13 +1103,14 @@ func (s *server) processAppendEntriesResponse(resp *AppendEntriesResponse) {
 	}
 	sort.Sort(sort.Reverse(uint64Slice(indices)))
 
-	// We can commit up to the index which the majority of the members have appended.
+	// 提交之前的日志(仅leader自己提交)
 	commitIndex := indices[s.QuorumSize()-1]
 	committedIndex := s.log.commitIndex
 
 	if commitIndex > committedIndex {
-		// leader needs to do a fsync before committing log entries
+		// 日志提交前要写入磁盘
 		s.log.sync()
+		// 日志提交
 		s.log.setCommitIndex(commitIndex)
 		s.debugln("commit index ", commitIndex)
 	}
