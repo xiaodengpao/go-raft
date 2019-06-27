@@ -406,6 +406,7 @@ func (l *Log) flushCommitIndex() {
 
 // Truncates the log to the given index and term. This only works if the log
 // at the index has not been committed.
+// index: PrevLogIndex  term: PrevLogTerm
 func (l *Log) truncate(index uint64, term uint64) error {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()

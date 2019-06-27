@@ -1040,7 +1040,7 @@ func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*Append
 
 		// 任期比自己的大
 	} else {
-		// Update term and leader.
+		// 更新自己的任期，停掉leader心跳，变成Follower
 		s.updateCurrentTerm(req.Term, req.LeaderName)
 	}
 
@@ -1050,7 +1050,7 @@ func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*Append
 		return newAppendEntriesResponse(s.currentTerm, false, s.log.currentIndex(), s.log.CommitIndex()), true
 	}
 
-	// Append entries to the log.
+	// 判断leader是否合规：日志完整性
 	if err := s.log.appendEntries(req.Entries); err != nil {
 		s.debugln("server.ae.append.error: ", err)
 		return newAppendEntriesResponse(s.currentTerm, false, s.log.currentIndex(), s.log.CommitIndex()), true
