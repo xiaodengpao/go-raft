@@ -757,8 +757,7 @@ func (s *server) followerLoop() {
 			e.c <- err
 
 		case <-timeoutChan:
-			// only allow synced follower to promote to candidate
-			// 只有在超时的情况下，才能变成 候选人
+			// 当前日志 index > 0
 			if s.promotable() {
 				s.setState(Candidate)
 			} else {
@@ -767,9 +766,9 @@ func (s *server) followerLoop() {
 			}
 		}
 
-		// Converts to candidate if election timeout elapses without either:
-		//   1.Receiving valid AppendEntries RPC, or
-		//   2.Granting vote to candidate
+		// 只有两种情况下会保持follower状态并继续等待:
+		//   1.收到更大任期（不小于自己）leader的PRC
+		//   2.成功投出自己的选票
 		if update {
 			since = time.Now()
 			timeoutChan = afterBetween(s.ElectionTimeout(), s.ElectionTimeout()*2)
@@ -1149,6 +1148,7 @@ func (s *server) RequestVote(req *RequestVoteRequest) *RequestVoteResponse {
 }
 
 // 处理其他节点发起的投票请求
+// 投票不成功，update = false
 func (s *server) processRequestVoteRequest(req *RequestVoteRequest) (*RequestVoteResponse, bool) {
 
 	// 其他节点任期低于当前节点任期，return false.
