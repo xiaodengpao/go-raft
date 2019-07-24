@@ -217,9 +217,11 @@ func NewServer(name string, path string, transporter Transporter, stateMachine S
 	// Setup apply function.
 	s.log.ApplyFunc = func(e *LogEntry, c Command) (interface{}, error) {
 		// Dispatch commit event.
+
+		// 传播commit消息
 		s.DispatchEvent(newEvent(CommitEventType, e, nil))
 
-		// Apply command to the state machine.
+		// apply command 到状态机
 		switch c := c.(type) {
 		case CommandApply:
 			return c.Apply(&context{
@@ -655,17 +657,22 @@ func (s *server) loop() {
 
 // Sends an event to the event loop to be processed. The function will wait
 // until the event is actually processed before returning.
+// 发送command事件到evenloop中，交由系统处理
 func (s *server) send(value interface{}) (interface{}, error) {
 	if !s.Running() {
 		return nil, StopError
 	}
 
 	event := &ev{target: value, c: make(chan error, 1)}
+
+	// 先写
 	select {
 	case s.c <- event:
 	case <-s.stopped:
 		return nil, StopError
 	}
+
+	// 后读，返回结果
 	select {
 	case <-s.stopped:
 		return nil, StopError
@@ -885,10 +892,13 @@ func (s *server) candidateLoop() {
 }
 
 // The event loop that is run when the server is in a Leader state.
+// command通过leaderLoop进行处理，通过chan进行监听
 func (s *server) leaderLoop() {
+	// 获取当前最新的日志index
 	logIndex, _ := s.log.lastInfo()
 
-	// Update the peers prevLogIndex to leader's lastLogIndex and start heartbeat.
+	// leader当选之后立即更新followers的prevLogIndex
+	// 立即开启心跳
 	s.debugln("leaderLoop.set.PrevIndex to ", logIndex)
 	for _, peer := range s.peers {
 		peer.setPrevLogIndex(logIndex)
@@ -902,6 +912,7 @@ func (s *server) leaderLoop() {
 	s.routineGroup.Add(1)
 	go func() {
 		defer s.routineGroup.Done()
+		// 当选leader之后马上开启一个no-op
 		s.Do(NOPCommand{})
 	}()
 
@@ -974,11 +985,13 @@ func (s *server) Do(command Command) (interface{}, error) {
 	return s.send(command)
 }
 
-// Processes a command.
+// 处理一个 command
+// 只有leader才会处理
 func (s *server) processCommand(command Command, e *ev) {
 	s.debugln("server.command.process")
 
-	// Create an entry for the command in the log.
+	// 创建一个logEntry
+	// ev = event
 	entry, err := s.log.createEntry(s.currentTerm, command, e)
 
 	if err != nil {
@@ -987,6 +1000,7 @@ func (s *server) processCommand(command Command, e *ev) {
 		return
 	}
 
+	// 本地服务写入log
 	if err := s.log.appendEntry(entry); err != nil {
 		s.debugln("server.command.log.error:", err)
 		e.c <- err

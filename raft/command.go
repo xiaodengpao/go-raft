@@ -43,13 +43,16 @@ func newCommand(name string, data []byte) (Command, error) {
 	}
 
 	// Make a copy of the command.
+	// relfex对象，用于New一个新实例出来，默认值都是空的，但是方法内保留了值（写死）
 	v := reflect.New(reflect.Indirect(reflect.ValueOf(command)).Type()).Interface()
 	copy, ok := v.(Command)
+
 	if !ok {
 		panic(fmt.Sprintf("raft: Unable to copy command: %s (%v)", command.CommandName(), reflect.ValueOf(v).Kind().String()))
 	}
 
 	// If data for the command was passed in the decode it.
+	// 写入data到command
 	if data != nil {
 		if encoder, ok := copy.(CommandEncoder); ok {
 			if err := encoder.Decode(bytes.NewReader(data)); err != nil {
@@ -65,7 +68,8 @@ func newCommand(name string, data []byte) (Command, error) {
 	return copy, nil
 }
 
-// Registers a command by storing a reference to an instance of it.
+// raftd 中会调用此方法
+// 注册 command 类型：write
 func RegisterCommand(command Command) {
 	if command == nil {
 		panic(fmt.Sprintf("raft: Cannot register nil"))

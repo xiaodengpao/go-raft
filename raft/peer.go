@@ -96,13 +96,16 @@ func (p *Peer) setLastActivity(now time.Time) {
 // Heartbeat
 //--------------------------------------
 
-// Starts the peer heartbeat.
+// 对节点开始心跳
+// 固定时间间隔发送心跳
 func (p *Peer) startHeartbeat() {
 	p.stopChan = make(chan bool)
 	c := make(chan bool)
 
+	// 重置active时间
 	p.setLastActivity(time.Now())
 
+	// 给当前server的waitGroup add 1
 	p.server.routineGroup.Add(1)
 	go func() {
 		defer p.server.routineGroup.Done()
@@ -147,6 +150,7 @@ func (p *Peer) clone() *Peer {
 //--------------------------------------
 
 // Listens to the heartbeat timeout and flushes an AppendEntries RPC.
+// 心跳：超时或者resp
 func (p *Peer) heartbeat(c chan bool) {
 	stopChan := p.stopChan
 
@@ -169,7 +173,7 @@ func (p *Peer) heartbeat(c chan bool) {
 				debugln("peer.heartbeat.stop: ", p.Name)
 				return
 			}
-
+		// 固定间隔发送心跳包
 		case <-ticker:
 			start := time.Now()
 			p.flush()

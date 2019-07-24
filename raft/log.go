@@ -507,7 +507,7 @@ func (l *Log) appendEntries(entries []*protobuf.LogEntry) error {
 	return nil
 }
 
-// Writes a single log entry to the end of the log.
+// 写入日志
 func (l *Log) appendEntry(entry *LogEntry) error {
 	l.mutex.Lock()
 	defer l.mutex.Unlock()
@@ -517,6 +517,7 @@ func (l *Log) appendEntry(entry *LogEntry) error {
 	}
 
 	// Make sure the term and index are greater than the previous.
+	//  校验日志的合法性
 	if len(l.entries) > 0 {
 		lastEntry := l.entries[len(l.entries)-1]
 		if entry.Term() < lastEntry.Term() {
