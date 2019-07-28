@@ -47,7 +47,7 @@ func New(path string, host string, port int) *Server {
 		// 读取节点名称
 		s.name = string(b)
 	} else {
-		// 创建节点名字，病保存到本地file
+		// 创建节点名字，并保存到本地file
 		s.name = fmt.Sprintf("%07x", rand.Int())[0:7]
 		if err = ioutil.WriteFile(filepath.Join(path, "name"), []byte(s.name), 0644); err != nil {
 			panic(err)

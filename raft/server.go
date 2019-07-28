@@ -456,10 +456,9 @@ func init() {
 }
 
 // 启动 raft server
-// If log entries exist then allow promotion to candidate if no AEs received.
-// If no log entries exist then wait for AEs from another node.
-// If no log entries exist and a self-join command is issued then
-// immediately become leader and commit entry.
+// 1、如果日志不为空，允许change to candidate
+// 2、如果日志为空，一直等待AEs
+// 3、如果日志为空，command 是leader，立即变成leader并且commit entry
 func (s *server) Start() error {
 	// Exit if the server is already running.
 	if s.Running() {
@@ -470,9 +469,9 @@ func (s *server) Start() error {
 		return err
 	}
 
-	// stopped needs to be allocated each time server starts
-	// because it is closed at `Stop`.
 	s.stopped = make(chan bool)
+
+	// 服务启动时默认是follower
 	s.setState(Follower)
 
 	// If no log entries exist then
@@ -491,6 +490,7 @@ func (s *server) Start() error {
 	debugln(s.GetState())
 
 	s.routineGroup.Add(1)
+
 	go func() {
 		defer s.routineGroup.Done()
 
