@@ -168,6 +168,8 @@ type server struct {
 
 	connectionString string
 
+	// wait
+	// 作用是什么？
 	routineGroup sync.WaitGroup
 }
 
