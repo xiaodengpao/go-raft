@@ -188,6 +188,7 @@ func (s *Server) writeHandler(w http.ResponseWriter, req *http.Request) {
 	value := string(b)
 
 	// Execute the command against the Raft server.
+	// raft写入入口
 	_, err = s.raftServer.Do(command.NewWriteCommand(vars["key"], value))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

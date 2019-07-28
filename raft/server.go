@@ -168,6 +168,8 @@ type server struct {
 
 	connectionString string
 
+	// wait
+	// 作用是什么？
 	routineGroup sync.WaitGroup
 }
 
@@ -217,9 +219,11 @@ func NewServer(name string, path string, transporter Transporter, stateMachine S
 	// Setup apply function.
 	s.log.ApplyFunc = func(e *LogEntry, c Command) (interface{}, error) {
 		// Dispatch commit event.
+
+		// 传播commit消息
 		s.DispatchEvent(newEvent(CommitEventType, e, nil))
 
-		// Apply command to the state machine.
+		// apply command 到状态机
 		switch c := c.(type) {
 		case CommandApply:
 			return c.Apply(&context{
@@ -655,17 +659,22 @@ func (s *server) loop() {
 
 // Sends an event to the event loop to be processed. The function will wait
 // until the event is actually processed before returning.
+// 发送command事件到evenloop中，交由系统处理
 func (s *server) send(value interface{}) (interface{}, error) {
 	if !s.Running() {
 		return nil, StopError
 	}
 
 	event := &ev{target: value, c: make(chan error, 1)}
+
+	// 先写
 	select {
 	case s.c <- event:
 	case <-s.stopped:
 		return nil, StopError
 	}
+
+	// 后读，返回结果
 	select {
 	case <-s.stopped:
 		return nil, StopError
@@ -757,8 +766,7 @@ func (s *server) followerLoop() {
 			e.c <- err
 
 		case <-timeoutChan:
-			// only allow synced follower to promote to candidate
-			// 只有在超时的情况下，才能变成 候选人
+			// 当前日志 index > 0
 			if s.promotable() {
 				s.setState(Candidate)
 			} else {
@@ -767,9 +775,9 @@ func (s *server) followerLoop() {
 			}
 		}
 
-		// Converts to candidate if election timeout elapses without either:
-		//   1.Receiving valid AppendEntries RPC, or
-		//   2.Granting vote to candidate
+		// 只有两种情况下会保持follower状态并继续等待:
+		//   1.收到更大任期（不小于自己）leader的PRC
+		//   2.成功投出自己的选票
 		if update {
 			since = time.Now()
 			timeoutChan = afterBetween(s.ElectionTimeout(), s.ElectionTimeout()*2)
@@ -886,10 +894,13 @@ func (s *server) candidateLoop() {
 }
 
 // The event loop that is run when the server is in a Leader state.
+// command通过leaderLoop进行处理，通过chan进行监听
 func (s *server) leaderLoop() {
+	// 获取当前最新的日志index
 	logIndex, _ := s.log.lastInfo()
 
-	// Update the peers prevLogIndex to leader's lastLogIndex and start heartbeat.
+	// leader当选之后立即更新followers的prevLogIndex
+	// 立即开启心跳
 	s.debugln("leaderLoop.set.PrevIndex to ", logIndex)
 	for _, peer := range s.peers {
 		peer.setPrevLogIndex(logIndex)
@@ -903,6 +914,7 @@ func (s *server) leaderLoop() {
 	s.routineGroup.Add(1)
 	go func() {
 		defer s.routineGroup.Done()
+		// 当选leader之后马上开启一个no-op
 		s.Do(NOPCommand{})
 	}()
 
@@ -975,11 +987,13 @@ func (s *server) Do(command Command) (interface{}, error) {
 	return s.send(command)
 }
 
-// Processes a command.
+// 处理一个 command
+// 只有leader才会处理
 func (s *server) processCommand(command Command, e *ev) {
 	s.debugln("server.command.process")
 
-	// Create an entry for the command in the log.
+	// 创建一个logEntry
+	// ev = event
 	entry, err := s.log.createEntry(s.currentTerm, command, e)
 
 	if err != nil {
@@ -988,6 +1002,7 @@ func (s *server) processCommand(command Command, e *ev) {
 		return
 	}
 
+	// 本地服务写入log
 	if err := s.log.appendEntry(entry); err != nil {
 		s.debugln("server.command.log.error:", err)
 		e.c <- err
@@ -1041,7 +1056,7 @@ func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*Append
 
 		// 任期比自己的大
 	} else {
-		// Update term and leader.
+		// 更新自己的任期，停掉leader心跳，变成Follower
 		s.updateCurrentTerm(req.Term, req.LeaderName)
 	}
 
@@ -1051,7 +1066,7 @@ func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*Append
 		return newAppendEntriesResponse(s.currentTerm, false, s.log.currentIndex(), s.log.CommitIndex()), true
 	}
 
-	// Append entries to the log.
+	// 判断leader是否合规：日志完整性
 	if err := s.log.appendEntries(req.Entries); err != nil {
 		s.debugln("server.ae.append.error: ", err)
 		return newAppendEntriesResponse(s.currentTerm, false, s.log.currentIndex(), s.log.CommitIndex()), true
@@ -1149,6 +1164,7 @@ func (s *server) RequestVote(req *RequestVoteRequest) *RequestVoteResponse {
 }
 
 // 处理其他节点发起的投票请求
+// 投票不成功，update = false
 func (s *server) processRequestVoteRequest(req *RequestVoteRequest) (*RequestVoteResponse, bool) {
 
 	// 其他节点任期低于当前节点任期，return false.

@@ -18,7 +18,9 @@ type LogEntry struct {
 	event    *ev
 }
 
-// Creates a new log entry associated with a log.
+// 创建一个 log entry
+// 1、从command中读取data数据
+// 2、创建 logEntry
 func newLogEntry(log *Log, event *ev, index uint64, term uint64, command Command) (*LogEntry, error) {
 	var buf bytes.Buffer
 	var commandName string
