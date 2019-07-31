@@ -214,7 +214,8 @@ func NewServer(name string, path string, transporter Transporter, stateMachine S
 		maxLogEntriesPerRequest: MaxLogEntriesPerRequest,
 		connectionString:        connectionString,
 	}
-	s.eventDispatcher = newEventDispatcher(s)
+
+	s.eventDispatcher = newEventDispatcher(s) // 调试用的,让外界知道服务的运行状态
 
 	// Setup apply function.
 	s.log.ApplyFunc = func(e *LogEntry, c Command) (interface{}, error) {
@@ -314,7 +315,7 @@ func (s *server) State() string {
 	return s.state
 }
 
-// Sets the state of the server.
+// 设置当前server的角色
 func (s *server) setState(state string) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -574,7 +575,6 @@ func (s *server) Running() bool {
 
 // 可能涉及的操作：
 // 1：更新当前任期   2：存储prevLeader   3：voteFor重置   4：leader = leaderName
-// 如果一个leader发现了更大的term，立即停止自己的领导身份，变身follwer（保证任期最大特性, 保证任期的逻辑时钟特性，同时leader被废弃后，要保证整个集群的信息完成性不受影响）
 func (s *server) updateCurrentTerm(term uint64, leaderName string) {
 	_assert(term > s.currentTerm,
 		"upadteCurrentTerm: update is called when term is not larger than currentTerm")
@@ -709,15 +709,17 @@ func (s *server) sendAsync(value interface{}) {
 }
 
 // 跟随者事件循环.
-// Responds to RPCs from candidates and leaders.
-// Converts to candidate if election timeout elapses without either:
-//   1.Receiving valid AppendEntries RPC, or
-//   2.Granting vote to candidate
+// 接收candidate和leader的RPC并反馈.
+// 超时后变成candidate，结束followerloop.
+// 有以下两种情况时，重置超时时间:
+//   1.收到其他节点发出的appendRPC
+//   2.收到投票RPC
 func (s *server) followerLoop() {
 	since := time.Now()
 	electionTimeout := s.ElectionTimeout()
 	timeoutChan := afterBetween(s.ElectionTimeout(), s.ElectionTimeout()*2)
 
+	// for 循环
 	for s.State() == Follower {
 		var err error
 		update := false
@@ -762,11 +764,11 @@ func (s *server) followerLoop() {
 			default:
 				err = NotLeaderError
 			}
-			// Callback to event.
+			// 把上述行为发生的err推送到管道.
 			e.c <- err
 
 		case <-timeoutChan:
-			// 当前日志 index > 0
+			// 有日志的情况下，才能转变成candidate，否则就是无用功，继续等待
 			if s.promotable() {
 				s.setState(Candidate)
 			} else {
@@ -785,7 +787,8 @@ func (s *server) followerLoop() {
 	}
 }
 
-// 候选人循环，当服务处于候选人状态时，会运行这个loop
+// 候选人循环
+// 1、清空当前leader   2、准备投票必备参数：index(当前节点日志长度), term
 func (s *server) candidateLoop() {
 
 	// 上一个leader
@@ -794,7 +797,7 @@ func (s *server) candidateLoop() {
 	// 清空leader
 	s.leader = ""
 
-	// 这是啥
+	// 领导人切换事件
 	if prevLeader != s.leader {
 		s.DispatchEvent(newEvent(LeaderChangeEventType, s.leader, prevLeader))
 	}
@@ -807,13 +810,19 @@ func (s *server) candidateLoop() {
 
 	for s.State() == Candidate {
 		if doVote {
-			// Increment current term, vote for self.
+
+			// 自增任期
 			s.currentTerm++
+
+			// 给自己一票
 			s.votedFor = s.name
 
-			// Send RequestVote RPCs to all other servers.
+			// 管道接收resp
 			respChan = make(chan *RequestVoteResponse, len(s.peers))
+
+			// 集群中所有节点发送投票邀请
 			for _, peer := range s.peers {
+				// 并发执行，每发送1个请求，wait +1
 				s.routineGroup.Add(1)
 				go func(peer *Peer) {
 					defer s.routineGroup.Done()
@@ -848,19 +857,19 @@ func (s *server) candidateLoop() {
 			return
 		}
 
-		// 从其他节点获取返回结果.
+		// 只要state == candidate,不断select结果
 		// 1、服务停止
-		// 2、其他节点投票结果
+		// 2、处理resp投票结果
 		// 3、投票请求 \ 添加日志请求
-		// 4、服务超时
+		// 4、服务超时，再来一轮投票邀请
 		select {
 
-		// 1
+		// 1 服务停止
 		case <-s.stopped:
 			s.setState(Stopped)
 			return
 
-		// 2
+		// 2 处理resp投票结果
 		case resp := <-respChan:
 			if success := s.processVoteResponse(resp); success {
 				s.debugln("server.candidate.vote.granted: ", votesGranted)
@@ -886,7 +895,7 @@ func (s *server) candidateLoop() {
 			// Callback to event.
 			e.c <- err
 
-		// 4
+		// 4 服务超时，再来一轮投票邀请
 		case <-timeoutChan:
 			doVote = true
 		}
@@ -1038,6 +1047,7 @@ func (s *server) processAppendEntriesRequest(req *AppendEntriesRequest) (*Append
 	// 任何服务、任何时刻，任期值低于当前任期的数据都不可信
 	if req.Term < s.currentTerm {
 		s.debugln("server.ae.error: stale term")
+		// 返回当前term，以及日志 index commit-index
 		return newAppendEntriesResponse(s.currentTerm, false, s.log.currentIndex(), s.log.CommitIndex()), false
 	}
 
@@ -1174,11 +1184,11 @@ func (s *server) processRequestVoteRequest(req *RequestVoteRequest) (*RequestVot
 		return newRequestVoteResponse(s.currentTerm, false), false
 	}
 
-	// 如果其他节点任期大于当前任期，更新term，变身跟随者
+	// 任何投票请求，优先更新自己的term，并且重置 state = follower
 	if req.Term > s.Term() {
 		s.updateCurrentTerm(req.Term, "")
 
-		// 如果对方term不比自己的大，且已经投过票了，return false
+		// 一个term，一个节点只能投一票
 	} else if s.votedFor != "" && s.votedFor != req.CandidateName {
 		s.debugln("server.deny.vote: cause duplicate vote: ", req.CandidateName,
 			" already vote for ", s.votedFor)
